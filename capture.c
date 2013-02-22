@@ -8,6 +8,7 @@
  */
 
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -24,6 +25,7 @@
 #include <sys/ioctl.h>
 
 #include <linux/videodev2.h>
+#include <linux/fb.h>
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
@@ -50,7 +52,12 @@ static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format;
 static int              frame_count = 200;
-static int              frame_number = 0;
+//static int              frame_number = 0;
+
+static int fbfd = -1;
+static char *fbp = NULL;
+static struct fb_var_screeninfo vinfo;
+static struct fb_fix_screeninfo finfo;
 
 static void errno_exit(const char *s)
 {
@@ -69,18 +76,55 @@ static int xioctl(int fh, int request, void *arg)
         return r;
 }
 
+static inline int clip(int value, int min, int max)
+{
+	return value > max ? max : value < min ? min : value;
+}
+
+static void yuv2rgb32(const void *src)
+{
+	uint8_t *in = (uint8_t *)src;
+	int width = 640;
+	int height = 480;
+	int istride = 1280;
+	int x, y, j;
+	int y0, u, y1, v, r, g, b;
+	long location = 0;
+
+	for (y = 100; y < height + 100; ++y) {
+		for (j = 0, x = 100; j < width * 2; j += 4, x += 2) {
+			location = (x + vinfo.xoffset) * (vinfo.bits_per_pixel >> 3) +
+					(y + vinfo.yoffset) * finfo.line_length;
+			y0 = in[j];
+			u = in[j + 1] - 128;
+			y1 = in[j + 2];
+			v = in[j + 3] - 128;
+
+			r = (298 * y0 + 409 * v + 128) >> 8;
+			g = (298 * y0 - 100 * u - 208 * v + 128) >> 8;
+			b = (298 * y0 + 516 * u + 128) >> 8;
+
+			fbp[location + 0] = clip(b, 0, 255);
+			fbp[location + 1] = clip(g, 0, 255);
+			fbp[location + 2] = clip(r, 0, 255);
+			fbp[location + 3] = 255;
+
+			r = (298 * y1 + 409 * v + 128) >> 8;
+			g = (298 * y1 - 100 * u - 208 * v + 128) >> 8;
+			b = (298 * y1 + 516 * u + 128) >> 8;
+
+			fbp[location + 4] = clip(b, 0, 255);
+			fbp[location + 5] = clip(g, 0, 255);
+			fbp[location + 6] = clip(r, 0, 255);
+			fbp[location + 7] = 255;
+		}
+		in += istride;
+	}
+}
+
 static void process_image(const void *p, int size)
 {
-        frame_number++;
-        char filename[15];
-        sprintf(filename, "frame-%d.raw", frame_number);
-        FILE *fp=fopen(filename,"wb");
-        
-        if (out_buf)
-                fwrite(p, size, 1, fp);
-
-        fflush(fp);
-        fclose(fp);
+	yuv2rgb32(p);
 }
 
 static int read_frame(void)
@@ -378,6 +422,13 @@ static void init_mmap(void)
                 if (MAP_FAILED == buffers[n_buffers].start)
                         errno_exit("mmap");
         }
+
+	fbp = mmap(NULL, finfo.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fbfd, 0);
+	if (fbp == MAP_FAILED) {
+		fprintf(stderr, "framebuffer mmap failed\n");
+		exit(EXIT_FAILURE);
+	}
+	memset(fbp, 0, finfo.smem_len);
 }
 
 static void init_userp(unsigned int buffer_size)
@@ -426,6 +477,16 @@ static void init_device(void)
         struct v4l2_format fmt;
         unsigned int min;
 
+	//Get Screen infomation
+	if (xioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == -1) {
+		fprintf(stderr, "Get FB finfo failed\n");
+		exit(EXIT_FAILURE);
+	}
+	if (xioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == -1) {
+		fprintf(stderr, "Get FB vinfo failed\n");
+		exit(EXIT_FAILURE);
+	}
+
         if (-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)) {
                 if (EINVAL == errno) {
                         fprintf(stderr, "%s is no V4L2 device\n",
@@ -461,9 +522,7 @@ static void init_device(void)
                 break;
         }
 
-
         /* Select video input, video standard and tune here. */
-
 
         CLEAR(cropcap);
 
@@ -486,7 +545,6 @@ static void init_device(void)
         } else {
                 /* Errors ignored. */
         }
-
 
         CLEAR(fmt);
 
@@ -561,6 +619,12 @@ static void open_device(void)
                          dev_name, errno, strerror(errno));
                 exit(EXIT_FAILURE);
         }
+
+	fbfd = open("/dev/fb0", O_RDWR);
+	if (fbfd == -1) {
+		fprintf(stderr, "Cannot open '/dev/fb0'\n");
+		exit(EXIT_FAILURE);
+	}
 }
 
 static void usage(FILE *fp, int argc, char **argv)
