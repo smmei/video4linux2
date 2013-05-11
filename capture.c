@@ -81,11 +81,9 @@ static inline int clip(int value, int min, int max)
 	return value > max ? max : value < min ? min : value;
 }
 
-static void yuv2rgb32(const void *src)
+static void yuv2rgb32(const void *src, int width, int height, int bpp)
 {
 	uint8_t *in = (uint8_t *)src;
-	int width = 640;
-	int height = 480;
 	int istride = 1280;
 	int x, y, j;
 	int y0, u, y1, v, r, g, b;
@@ -122,9 +120,85 @@ static void yuv2rgb32(const void *src)
 	}
 }
 
-static void process_image(const void *p, int size)
+static void YUYV_2_RGB16(int y, int u, int v, unsigned char *rgb)
 {
-	yuv2rgb32(p);
+	int r, g, b;
+
+	r = (y + (359 * v)) >> 8;
+	g = (y - (88 * u) - (183 * v)) >> 8;
+	b = (y + (454 * u)) >> 8;
+
+	b = (b > 255) ? 255 : ((b < 0) ? 0 : b);
+	g = (g > 255) ? 255 : ((g < 0) ? 0 : g);
+	r = (r > 255) ? 255 : ((r < 0) ? 0 : r);
+
+	b = (b >> 3);
+	g = (g >> 2);
+	r = (r >> 3);
+
+	*(rgb++) = (b & 0x1f) | ((g & 0x3f) << 5);
+	*(rgb++) = ((g & 0x3f) >> 3) | ((r & 0x1f) << 3);
+}
+ 
+static void YUYV_2_RGB32(int y, int u, int v, unsigned char *rgb)
+{
+	int r, g, b;
+
+	r = (y + (359 * v)) >> 8;
+	g = (y - (88 * u) - (183 * v)) >> 8;
+	b = (y + (454 * u)) >> 8;
+
+	b = (b > 255) ? 255 : ((b < 0) ? 0 : b);
+	g = (g > 255) ? 255 : ((g < 0) ? 0 : g);
+	r = (r > 255) ? 255 : ((r < 0) ? 0 : r);
+
+	*(rgb++) = b;
+	*(rgb++) = g;
+	*(rgb++) = r;
+	*(rgb++) = 0x0;
+}
+
+static int do_cmos(void *src, int width, int height)
+{
+	int h;
+	int x;
+	int y, u, v;
+	unsigned char *y_src, *uv_src;
+	int bpp = vinfo.bits_per_pixel;
+
+	y_src  = src;
+	uv_src = src + width * height;
+
+	for (h = 0; h < height; h++) {
+		void *ptr = fbp + h * vinfo.xres * (bpp >> 3);
+
+		for (x = 0; x < width; x++) {
+			y = y_src[width * h + x] << 8;
+			if(x % 2 == 0) {
+				u = uv_src[width * h + x]     - 128;
+				v = uv_src[width * h + x + 1] - 128;
+			} else {
+				v = uv_src[width * h + x]     - 128;
+				u = uv_src[width * h + x - 1] - 128;
+			}
+
+			if (bpp == 32)
+				YUYV_2_RGB32(y, u, v, ptr);
+			else if (bpp == 16)
+				YUYV_2_RGB16(y, u, v, ptr);
+			else
+				return -1;
+
+			ptr += (bpp >> 3);
+		}
+	}
+	return 0;
+}
+
+static void process_image(void *p, int size)
+{
+	//yuv2rgb32(p);
+	do_cmos(p, 640, 480);
 }
 
 static int read_frame(void)
