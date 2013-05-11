@@ -29,10 +29,6 @@
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
-#ifndef V4L2_PIX_FMT_H264
-#define V4L2_PIX_FMT_H264     v4l2_fourcc('H', '2', '6', '4') /* H264 with start codes */
-#endif
-
 enum io_method {
         IO_METHOD_READ,
         IO_METHOD_MMAP,
@@ -58,6 +54,9 @@ static int fbfd = -1;
 static char *fbp = NULL;
 static struct fb_var_screeninfo vinfo;
 static struct fb_fix_screeninfo finfo;
+
+static int force_width = 640;
+static int force_height = 480;
 
 static void errno_exit(const char *s)
 {
@@ -198,7 +197,7 @@ static int do_cmos(void *src, int width, int height)
 static void process_image(void *p, int size)
 {
 	//yuv2rgb32(p);
-	do_cmos(p, 640, 480);
+	do_cmos(p, force_width, force_height);
 }
 
 static int read_frame(void)
@@ -622,23 +621,15 @@ static void init_device(void)
 
         CLEAR(fmt);
 
-        fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        if (force_format) {
-	fprintf(stderr, "Set H264\r\n");
-                fmt.fmt.pix.width       = 640; //replace
-                fmt.fmt.pix.height      = 480; //replace
-                fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264; //replace
-                fmt.fmt.pix.field       = V4L2_FIELD_ANY;
+        fmt.type		= V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	fmt.fmt.pix.width       = force_width; //replace
+	fmt.fmt.pix.height      = force_height; //replace
+	fmt.fmt.pix.field       = V4L2_FIELD_ANY;
 
-                if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
-                        errno_exit("VIDIOC_S_FMT");
+	if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
+		errno_exit("VIDIOC_S_FMT");
 
-                /* Note VIDIOC_S_FMT may change width and height. */
-        } else {
-                /* Preserve original settings as set by v4l2-ctl for example */
-                if (-1 == xioctl(fd, VIDIOC_G_FMT, &fmt))
-                        errno_exit("VIDIOC_G_FMT");
-        }
+	/* Note VIDIOC_S_FMT may change width and height. */
 
         /* Buggy driver paranoia. */
         min = fmt.fmt.pix.width * 2;
@@ -705,32 +696,34 @@ static void usage(FILE *fp, int argc, char **argv)
 {
         fprintf(fp,
                  "Usage: %s [options]\n\n"
-                 "Version 1.3\n"
+                 "Version 1.4\n"
                  "Options:\n"
                  "-d | --device name   Video device name [%s]\n"
-                 "-h | --help          Print this message\n"
                  "-m | --mmap          Use memory mapped buffers [default]\n"
                  "-r | --read          Use read() calls\n"
                  "-u | --userp         Use application allocated buffers\n"
                  "-o | --output        Outputs stream to stdout\n"
                  "-f | --format        Force format to 640x480 YUYV\n"
                  "-c | --count         Number of frames to grab [%i]\n"
+                 "-w | --width         xxx\n"
+                 "-h | --height        xxx\n"
                  "",
                  argv[0], dev_name, frame_count);
 }
 
-static const char short_options[] = "d:hmruofc:";
+static const char short_options[] = "d:w:h:mruofc:";
 
 static const struct option
 long_options[] = {
         { "device", required_argument, NULL, 'd' },
-        { "help",   no_argument,       NULL, 'h' },
         { "mmap",   no_argument,       NULL, 'm' },
         { "read",   no_argument,       NULL, 'r' },
         { "userp",  no_argument,       NULL, 'u' },
         { "output", no_argument,       NULL, 'o' },
         { "format", no_argument,       NULL, 'f' },
         { "count",  required_argument, NULL, 'c' },
+        { "width",  required_argument, NULL, 'w' },
+        { "height", required_argument, NULL, 'h' },
         { 0, 0, 0, 0 }
 };
 
@@ -756,10 +749,6 @@ int main(int argc, char **argv)
                         dev_name = optarg;
                         break;
 
-                case 'h':
-                        usage(stdout, argc, argv);
-                        exit(EXIT_SUCCESS);
-
                 case 'm':
                         io = IO_METHOD_MMAP;
                         break;
@@ -780,6 +769,14 @@ int main(int argc, char **argv)
                         force_format++;
                         break;
 
+		case 'w':
+			force_width = strtol(optarg, NULL, 0);
+			break;
+
+		case 'h':
+			force_height = strtol(optarg, NULL, 0);
+			break;
+
                 case 'c':
                         errno = 0;
                         frame_count = strtol(optarg, NULL, 0);
@@ -792,6 +789,7 @@ int main(int argc, char **argv)
                         exit(EXIT_FAILURE);
                 }
         }
+	printf("force_width %d, force_height %d\n", force_width, force_height);
 
         open_device();
         init_device();
