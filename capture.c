@@ -231,6 +231,12 @@ static int read_frame(void)
                 buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
                 buf.memory = V4L2_MEMORY_MMAP;
 
+		{
+		struct timeval tv1, tv2;
+		uint64_t t;
+		gettimeofday(&tv2, NULL);
+
+		
                 if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf)) {
                         switch (errno) {
                         case EAGAIN:
@@ -245,6 +251,11 @@ static int read_frame(void)
                                 errno_exit("VIDIOC_DQBUF");
                         }
                 }
+		gettimeofday(&tv1, NULL);
+		t = (tv1.tv_sec - tv2.tv_sec) * 1000000 + tv1.tv_usec - tv2.tv_usec;
+		printf("dqbuf %lld usec\n", t);
+		}
+
 
                 assert(buf.index < n_buffers);
 
